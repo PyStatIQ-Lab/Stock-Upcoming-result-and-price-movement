@@ -4,6 +4,7 @@ import os
 from openpyxl import load_workbook
 import streamlit as st
 from datetime import datetime, timedelta
+import matplotlib.pyplot as plt
 
 # Path to the stocks.xlsx file
 STOCKS_FILE_PATH = 'stocks.xlsx'  # Change this to the correct path if needed
@@ -28,101 +29,130 @@ def get_financial_data(ticker):
         historical_data_1m = stock.history(period="1mo")
         historical_data_3m = stock.history(period="3mo")
         historical_data_1d = stock.history(period="1d")
+        historical_data_1y = stock.history(period="1y")
         
         latest_close_price = historical_data_1d['Close'].iloc[-1]
         
         # Calculate price trends
         price_1m_ago = historical_data_1m['Close'].iloc[0]
         price_3m_ago = historical_data_3m['Close'].iloc[0]
+        price_1y_ago = historical_data_1y['Close'].iloc[0]
         
         price_change_1m = ((latest_close_price - price_1m_ago) / price_1m_ago) * 100
         price_change_3m = ((latest_close_price - price_3m_ago) / price_3m_ago) * 100
+        price_change_1y = ((latest_close_price - price_1y_ago) / price_1y_ago) * 100
         
         result['1M Price Change'] = f"{price_change_1m:.2f}%"
         result['3M Price Change'] = f"{price_change_3m:.2f}%"
+        result['1Y Price Change'] = f"{price_change_1y:.2f}%"
         
         # Determine price trend
-        if price_change_1m > 5 and price_change_3m > 10:
+        if price_change_1m > 10 and price_change_3m > 20:
+            price_trend = "Very Strong Uptrend"
+        elif price_change_1m > 5 and price_change_3m > 10:
             price_trend = "Strong Uptrend"
         elif price_change_1m > 2 and price_change_3m > 5:
             price_trend = "Moderate Uptrend"
+        elif price_change_1m < -10 and price_change_3m < -20:
+            price_trend = "Very Strong Downtrend"
         elif price_change_1m < -5 and price_change_3m < -10:
             price_trend = "Strong Downtrend"
         elif price_change_1m < -2 and price_change_3m < -5:
             price_trend = "Moderate Downtrend"
         else:
-            price_trend = "Neutral"
+            price_trend = "Neutral Trend"
             
         result['Price Trend'] = price_trend
         
+        # Store historical data for visualization
+        result['Historical Data'] = historical_data_1y
+        
     except Exception as e:
+        st.warning(f"Could not fetch complete price data for {ticker}: {e}")
         latest_close_price = "N/A"
         result['1M Price Change'] = "N/A"
         result['3M Price Change'] = "N/A"
+        result['1Y Price Change'] = "N/A"
         result['Price Trend'] = "N/A"
+        result['Historical Data'] = None
 
-    result['Net Income'] = income_statement.loc['Net Income'] if 'Net Income' in income_statement.index else "N/A"
-    result['Operating Income'] = income_statement.loc['Operating Income'] if 'Operating Income' in income_statement.index else \
-                                 income_statement.loc['EBIT'] if 'EBIT' in income_statement.index else "N/A"
+    # Basic financial metrics
+    result['Net Income'] = income_statement.loc['Net Income'].iloc[0] if 'Net Income' in income_statement.index else "N/A"
+    result['Operating Income'] = income_statement.loc['Operating Income'].iloc[0] if 'Operating Income' in income_statement.index else \
+                                 income_statement.loc['EBIT'].iloc[0] if 'EBIT' in income_statement.index else "N/A"
     
     try:
-        eps = income_statement.loc['Earnings Before Interest and Taxes'] / stock.info['sharesOutstanding']
+        shares_outstanding = stock.info['sharesOutstanding']
+        eps = income_statement.loc['Net Income'].iloc[0] / shares_outstanding
+        result['EPS'] = f"${eps:.2f}"
     except KeyError:
-        eps = "N/A"
-    result['EPS'] = eps
-    
-    result['Revenue Growth'] = income_statement.loc['Total Revenue'].pct_change().iloc[-1] if 'Total Revenue' in income_statement.index else "N/A"
-    
-    result['Retained Earnings'] = balance_sheet.loc['Retained Earnings'] if 'Retained Earnings' in balance_sheet.index else "N/A"
-    result['Cash Reserves'] = balance_sheet.loc['Cash'] if 'Cash' in balance_sheet.index else "N/A"
+        result['EPS'] = "N/A"
     
     try:
-        result['Debt-to-Equity Ratio'] = balance_sheet.loc['Total Debt'] / balance_sheet.loc['Stockholders Equity'] if 'Total Debt' in balance_sheet.index and 'Stockholders Equity' in balance_sheet.index else "N/A"
+        revenue_growth = income_statement.loc['Total Revenue'].pct_change().iloc[-1] * 100
+        result['Revenue Growth'] = f"{revenue_growth:.2f}%"
+    except (KeyError, IndexError):
+        result['Revenue Growth'] = "N/A"
+    
+    result['Retained Earnings'] = balance_sheet.loc['Retained Earnings'].iloc[0] if 'Retained Earnings' in balance_sheet.index else "N/A"
+    result['Cash Reserves'] = balance_sheet.loc['Cash'].iloc[0] if 'Cash' in balance_sheet.index else "N/A"
+    
+    try:
+        debt = balance_sheet.loc['Total Debt'].iloc[0]
+        equity = balance_sheet.loc['Stockholders Equity'].iloc[0]
+        result['Debt-to-Equity Ratio'] = f"{debt/equity:.2f}"
     except KeyError:
         result['Debt-to-Equity Ratio'] = "N/A"
     
-    result['Working Capital'] = balance_sheet.loc['Total Assets'] - balance_sheet.loc['Total Liabilities Net Minority Interest'] if 'Total Assets' in balance_sheet.index and 'Total Liabilities Net Minority Interest' in balance_sheet.index else "N/A"
+    try:
+        assets = balance_sheet.loc['Total Assets'].iloc[0]
+        liabilities = balance_sheet.loc['Total Liabilities Net Minority Interest'].iloc[0]
+        result['Working Capital'] = f"${assets - liabilities:,.2f}"
+    except KeyError:
+        result['Working Capital'] = "N/A"
     
-    result['Dividend Payout Ratio'] = stock.info.get('dividendYield', "N/A")
-    result['Dividend Yield'] = result['Dividend Payout Ratio']
+    result['Dividend Yield'] = f"{info.get('dividendYield', 0) * 100:.2f}%" if 'dividendYield' in info else "N/A"
     
-    result['Free Cash Flow'] = cash_flow.loc['Free Cash Flow'] if 'Free Cash Flow' in cash_flow.index else "N/A"
+    result['Free Cash Flow'] = cash_flow.loc['Free Cash Flow'].iloc[0] if 'Free Cash Flow' in cash_flow.index else "N/A"
     
+    # Dividend information
     if not dividends.empty:
-        result['Dividend Growth Rate'] = dividends.pct_change().mean()
+        result['Dividend Growth Rate'] = f"{dividends.pct_change().mean() * 100:.2f}%"
     else:
         result['Dividend Growth Rate'] = "N/A"
     
-    result['Latest Close Price'] = latest_close_price
-    result['Dividend Percentage'] = "N/A"
+    result['Latest Close Price'] = f"${latest_close_price:.2f}" if latest_close_price != "N/A" else "N/A"
     
     if not dividends.empty:
         predicted_dividend_amount = dividends.iloc[-1]
         if latest_close_price != "N/A":
-            dividend_percentage = (predicted_dividend_amount / latest_close_price) * 100
-            result['Dividend Percentage'] = dividend_percentage
+            dividend_percentage = (predicted_dividend_amount / float(latest_close_price)) * 100
+            result['Dividend Percentage'] = f"{dividend_percentage:.2f}%"
         
-        past_dividends = dividends.tail(10)
-        result['Past Dividends'] = past_dividends.tolist()
+        past_dividends = dividends.tail(4)  # Last 4 dividends
+        result['Past Dividends'] = [f"${x:.2f}" for x in past_dividends.tolist()]
         
         date_diffs = past_dividends.index.to_series().diff().dropna()
         if not date_diffs.empty:
             avg_diff = date_diffs.mean()
             last_dividend_date = past_dividends.index[-1]
             next_dividend_date = last_dividend_date + avg_diff
-            result['Next Dividend Date'] = str(next_dividend_date)
+            result['Next Dividend Date'] = str(next_dividend_date.date())
+            result['Days Until Dividend'] = (next_dividend_date.date() - datetime.now().date()).days
         else:
             result['Next Dividend Date'] = 'N/A'
+            result['Days Until Dividend'] = 'N/A'
 
-        result['Predicted Dividend Amount'] = predicted_dividend_amount
+        result['Predicted Dividend Amount'] = f"${predicted_dividend_amount:.2f}"
     else:
         result['Next Dividend Date'] = 'N/A'
+        result['Days Until Dividend'] = 'N/A'
         result['Predicted Dividend Amount'] = 'N/A'
         result['Dividend Percentage'] = "N/A"
+        result['Past Dividends'] = []
 
-    # Add upcoming earnings date and expectation
+    # Earnings information
     try:
-        # Get earnings calendar
         earnings_dates = stock.calendar
         if earnings_dates is not None and not earnings_dates.empty:
             next_earnings = earnings_dates.iloc[0]
@@ -136,25 +166,186 @@ def get_financial_data(ticker):
             result['Days Until Earnings'] = days_until_earnings
             
             # Determine expectation based on price trend and days until earnings
-            if days_until_earnings <= 14:  # Earnings within 2 weeks
+            if days_until_earnings <= 7:  # Earnings within 1 week
                 if "Uptrend" in price_trend:
-                    result['Earnings Expectation'] = "Positive (Price rising before earnings)"
+                    result['Earnings Expectation'] = "Very Positive (Strong uptrend right before earnings)"
+                    result['Earnings Confidence'] = "High"
                 elif "Downtrend" in price_trend:
-                    result['Earnings Expectation'] = "Negative (Price falling before earnings)"
+                    result['Earnings Expectation'] = "Very Negative (Strong downtrend right before earnings)"
+                    result['Earnings Confidence'] = "High"
                 else:
-                    result['Earnings Expectation'] = "Neutral (No clear trend)"
+                    result['Earnings Expectation'] = "Neutral (No clear trend before earnings)"
+                    result['Earnings Confidence'] = "Medium"
+            elif days_until_earnings <= 14:  # Earnings within 2 weeks
+                if "Uptrend" in price_trend:
+                    result['Earnings Expectation'] = "Positive (Uptrend building before earnings)"
+                    result['Earnings Confidence'] = "Medium-High"
+                elif "Downtrend" in price_trend:
+                    result['Earnings Expectation'] = "Negative (Downtrend building before earnings)"
+                    result['Earnings Confidence'] = "Medium-High"
+                else:
+                    result['Earnings Expectation'] = "Neutral (No clear trend yet)"
+                    result['Earnings Confidence'] = "Medium"
             else:
                 result['Earnings Expectation'] = "Too early to predict (Earnings >2 weeks away)"
+                result['Earnings Confidence'] = "Low"
         else:
             result['Next Earnings Date'] = "N/A"
             result['Days Until Earnings'] = "N/A"
             result['Earnings Expectation'] = "N/A"
+            result['Earnings Confidence'] = "N/A"
     except Exception as e:
         result['Next Earnings Date'] = "N/A"
         result['Days Until Earnings'] = "N/A"
         result['Earnings Expectation'] = "N/A"
+        result['Earnings Confidence'] = "N/A"
 
     return result
 
-# Rest of your code remains the same...
-# [Keep all the existing functions and Streamlit app code below]
+# Function to save results to an Excel file
+def save_to_excel(results, filename="dividend_predictions.xlsx"):
+    try:
+        # Prepare data for DataFrame
+        data_for_excel = []
+        for result in results:
+            row = {
+                'Ticker': result['Ticker'],
+                'Latest Price': result['Latest Close Price'],
+                '1M Change': result['1M Price Change'],
+                '3M Change': result['3M Price Change'],
+                '1Y Change': result['1Y Price Change'],
+                'Price Trend': result['Price Trend'],
+                'Net Income': result['Net Income'],
+                'EPS': result['EPS'],
+                'Revenue Growth': result['Revenue Growth'],
+                'Debt-to-Equity': result['Debt-to-Equity Ratio'],
+                'Dividend Yield': result['Dividend Yield'],
+                'Next Dividend Date': result['Next Dividend Date'],
+                'Predicted Dividend': result['Predicted Dividend Amount'],
+                'Next Earnings Date': result['Next Earnings Date'],
+                'Days Until Earnings': result['Days Until Earnings'],
+                'Earnings Expectation': result['Earnings Expectation'],
+                'Earnings Confidence': result['Earnings Confidence']
+            }
+            data_for_excel.append(row)
+        
+        results_df = pd.DataFrame(data_for_excel)
+        
+        if os.path.exists(filename):
+            book = load_workbook(filename)
+            with pd.ExcelWriter(filename, engine='openpyxl') as writer:
+                writer.book = book
+                results_df.to_excel(writer, index=False, sheet_name='New Results')
+            st.success(f"Results appended to {filename}")
+        else:
+            results_df.to_excel(filename, index=False)
+            st.success(f"Results saved to new file {filename}")
+    except Exception as e:
+        st.error(f"Error saving to Excel: {e}")
+
+# Function to plot stock performance
+def plot_stock_performance(ticker, historical_data):
+    if historical_data is None:
+        return None
+    
+    plt.figure(figsize=(10, 5))
+    plt.plot(historical_data.index, historical_data['Close'], label='Closing Price')
+    plt.title(f'{ticker} 1-Year Performance')
+    plt.xlabel('Date')
+    plt.ylabel('Price ($)')
+    plt.grid(True)
+    plt.legend()
+    return plt
+
+# Streamlit App
+st.set_page_config(page_title="Stock Dividend Predictions", layout="wide")
+
+# Custom CSS
+st.markdown("""
+    <style>
+        .header-logo {
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+            width: 25%;
+        }
+        .metric-card {
+            padding: 15px;
+            border-radius: 10px;
+            background-color: #f0f2f6;
+            margin-bottom: 10px;
+        }
+        .positive {
+            color: green;
+            font-weight: bold;
+        }
+        .negative {
+            color: red;
+            font-weight: bold;
+        }
+        .neutral {
+            color: orange;
+            font-weight: bold;
+        }
+        /* Hide GitHub icons and fork button */
+        .css-1v0mbdj, .css-1b22hs3, footer, .css-1r6ntm8 { 
+            display: none !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# Display Header Logo
+st.markdown('<img class="header-logo" src="https://pystatiq.com/images/pystatIQ_logo.png" alt="Header Logo">', unsafe_allow_html=True)
+
+st.title('Stock Dividend Prediction and Financial Analysis')
+
+# Read the stock symbols from the local stocks.xlsx file
+if os.path.exists(STOCKS_FILE_PATH):
+    symbols_df = pd.read_excel(STOCKS_FILE_PATH)
+
+    # Check if the 'Symbol' column exists
+    if 'Symbol' not in symbols_df.columns:
+        st.error("The file must contain a 'Symbol' column with stock tickers.")
+    else:
+        # Let the user select stocks from the file
+        stock_options = symbols_df['Symbol'].tolist()
+        selected_stocks = st.multiselect("Select Stock Symbols", stock_options, help="Choose one or more stocks to analyze")
+
+        # Button to start the data fetching process
+        if st.button('Fetch Financial Data') and selected_stocks:
+            all_results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for i, ticker in enumerate(selected_stocks):
+                status_text.text(f"Processing {ticker} ({i+1}/{len(selected_stocks)})...")
+                progress_bar.progress((i + 1) / len(selected_stocks))
+                
+                result = get_financial_data(ticker)
+                if result is not None:
+                    all_results.append(result)
+            
+            progress_bar.empty()
+            status_text.empty()
+            
+            if all_results:
+                st.success("Analysis complete!")
+                
+                # Display results for each stock
+                for result in all_results:
+                    st.markdown(f"## {result['Ticker']} Analysis")
+                    
+                    # Create columns for layout
+                    col1, col2 = st.columns([2, 3])
+                    
+                    with col1:
+                        # Key metrics
+                        st.markdown("### Key Metrics")
+                        
+                        # Price information
+                        st.markdown(f"""
+                            <div class="metric-card">
+                                <b>Latest Price:</b> {result['Latest Close Price']}<br>
+                                <b>1M Change:</b> <span class="{'positive' if '%' in result['1M Price Change'] and float(result['1M Price Change'].replace('%','')) > 0 else 'negative' if '%' in result['1M Price Change'] and float(result['1M Price Change'].replace('%','')) < 0 else ''}">{result['1M Price Change']}</span><br>
+                                <b>3M Change:</b> <span class="{'positive' if '%' in result['3M Price Change'] and float(result['3M Price Change'].replace('%','')) > 0 else 'negative' if '%' in result['3M Price Change'] and float(result['3M Price Change'].replace('%','')) < 0 else ''}">{result['3M Price Change']}</span><br>
+                                <b>1Y Change:</b> <span class="{
