@@ -304,7 +304,7 @@ st.markdown("""
         .metric-card {
             padding: 15px;
             border-radius: 10px;
-            background-color: #f0f2f6;
+            background-color: #0d46b8;
             margin-bottom: 10px;
         }
         .positive {
